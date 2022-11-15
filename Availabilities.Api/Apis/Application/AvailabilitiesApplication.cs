@@ -1,4 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using Availabilities.Other;
 using Availabilities.Resources;
 using Availabilities.Storage;
 
@@ -15,20 +18,82 @@ namespace Availabilities.Apis.Application
 
         public TimeSlot ReserveAvailability(TimeSlot slot)
         {
-            //TODO: remember to round up the slot times to the nearest quarter hour
-            //TODO: remember to determine what data needs to be changed to remove this slot from the current availability slots
-            //TODO: Remember to throw new ResourceConflictException("The booking cannot be made for this time period") if there is not enough availability to cover it
-            //TODO: remember to return the actual slot that was made available
+            List<Availability> availabilities = this.storage.List();
+            DateTime bookingStartTime = slot.Start.ToNextOrCurrentQuarterHour();
+            DateTime bookingEndTime = slot.End.ToNextOrCurrentQuarterHour();
+            Availability availability =
+                availabilities.SingleOrDefault(a => a.StartUtc <= bookingStartTime && a.EndUtc >= bookingEndTime);
+            if (availability != null)
+            {
+                if (availability.StartUtc == bookingStartTime && availability.EndUtc == bookingEndTime)
+                {
+                    this.storage.Delete(availability.Id);
+                }
+                else if (availability.StartUtc == bookingStartTime)
+                {
+                    availability.StartUtc = bookingEndTime;
+                    this.storage.Upsert(availability);
+                }
+                else if (availability.EndUtc == bookingEndTime)
+                {
+                    availability.EndUtc = bookingStartTime;
+                    this.storage.Upsert(availability);
+                }
+                else
+                {
+                    Availability newAvailability = new Availability
+                    {
+                        StartUtc = bookingEndTime,
+                        EndUtc = availability.EndUtc
+                    };
+                    availability.EndUtc = bookingStartTime;
+                    this.storage.Upsert(availability);
+                    this.storage.Upsert(newAvailability);
+                }
+            }
+            else
+            {
+                throw new ResourceConflictException("The booking cannot be made for this time period");
+            }
 
-            throw new NotImplementedException();
+            return new TimeSlot(bookingStartTime, bookingEndTime);
         }
 
         public void ReleaseAvailability(TimeSlot slot)
         {
-            //TODO: remember to determine what data needs to be changed to add this availability slot back into the current set of availability.
-            //TODO: remember that availability is represented in contiguous blocks of time, never adjacent to each other.
-
-            throw new NotImplementedException();
+            DateTime bookingStartTime = slot.Start.ToNextOrCurrentQuarterHour();
+            DateTime bookingEndTime = slot.End.ToNextOrCurrentQuarterHour();
+            List<Availability> availabilities = this.storage.List();
+            Availability firstAvailability = availabilities.SingleOrDefault(availability => availability.EndUtc == bookingStartTime);
+            Availability secondAvailability = availabilities.SingleOrDefault(availability => availability.StartUtc == bookingEndTime);
+            if (firstAvailability != null && secondAvailability != null)
+            {
+                firstAvailability.EndUtc = secondAvailability.EndUtc;
+                this.storage.Delete(secondAvailability.Id);
+                this.storage.Upsert(firstAvailability);
+            }
+            else
+            {
+                if (firstAvailability != null)
+                {
+                    firstAvailability.EndUtc = bookingEndTime;
+                    this.storage.Upsert(firstAvailability);
+                }
+                else if (secondAvailability != null)
+                {
+                    secondAvailability.StartUtc = bookingStartTime;
+                    this.storage.Upsert(secondAvailability);
+                }
+                else
+                {
+                    Availability newAvailability = new Availability
+                    {
+                        StartUtc = bookingStartTime,
+                        EndUtc = bookingEndTime
+                    };
+                    this.storage.Upsert(newAvailability);
+                }
+            }
         }
     }
 }
